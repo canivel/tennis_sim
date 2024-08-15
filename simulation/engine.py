@@ -1,11 +1,10 @@
 # simulation/engine.py
 
-from typing import List, Dict
+from typing import List
 from .events import TennisEvent, ShotType, ShotOutcome
 from .match import Match
 from models.ml_model import MLModel
 from models.odds_calculator import OddsCalculator
-import random
 
 class SimulationEngine:
     def __init__(self, player1, player2, match_format, surface, is_indoor, weather, event_country, ml_model: MLModel, odds_calculator: OddsCalculator):
@@ -24,16 +23,67 @@ class SimulationEngine:
         print(f"Initial odds: {self.format_odds(self.current_odds)}")
 
         while not self.match.is_match_over():
-            event = self.generate_next_event()
-            self.process_event(event)
+            # Always start with a serve
+            serve_event = self.generate_serve_event()
+            self.process_event(serve_event)
+            
+            # Continue with rally until point is over
+            while not self.match.is_point_over():
+                rally_event = self.generate_rally_event()
+                self.process_event(rally_event)
+            
+            # Point is over, update match state
+            self.match.end_point()
 
         print("\nMatch ended.")
         self.print_final_results()
+    
+    def generate_serve_event(self) -> TennisEvent:
+        import random
+        
+        player = self.match.state.server
+        shot_type = ShotType.SERVE_1ST
+        
+        serve_in_prob = self.match.players[player].serve_accuracy
+        if random.random() < serve_in_prob:
+            shot_outcome = random.choices(
+                [ShotOutcome.ACE, ShotOutcome.IN_PLAY],
+                weights=[0.05, 0.95]
+            )[0]
+        else:
+            shot_outcome = ShotOutcome.OUT
+            
+            # If first serve is out, generate second serve
+            if shot_outcome == ShotOutcome.OUT:
+                shot_type = ShotType.SERVE_2ND
+                serve_in_prob = self.match.players[player].serve_accuracy * 1.1  # Slightly higher accuracy for second serve
+                if random.random() < serve_in_prob:
+                    shot_outcome = ShotOutcome.IN_PLAY
+                else:
+                    shot_outcome = ShotOutcome.DOUBLE_FAULT
+        
+        ball_speed = random.uniform(100, 140)  # Serve speeds are typically higher
+        ball_spin = random.uniform(1000, 3000)
+        
+        return TennisEvent(player, shot_type, shot_outcome, ball_speed, ball_spin)
+
+    def generate_rally_event(self) -> TennisEvent:
+        import random
+        
+        player = random.choice([0, 1])
+        shot_type = random.choice([st for st in ShotType if st not in [ShotType.SERVE_1ST, ShotType.SERVE_2ND]])
+        shot_outcome = random.choices(
+            [ShotOutcome.IN_PLAY, ShotOutcome.WINNER, ShotOutcome.FORCED_ERROR, ShotOutcome.UNFORCED_ERROR],
+            weights=[0.7, 0.1, 0.1, 0.1]
+        )[0]
+        
+        ball_speed = random.uniform(60, 120)
+        ball_spin = random.uniform(1000, 4000)
+        
+        return TennisEvent(player, shot_type, shot_outcome, ball_speed, ball_spin)
 
     def process_event(self, event: TennisEvent):
         self.match.update_state(event)
-        self.match.set_current_shot_info(event.shot_type, event.ball_speed, event.ball_spin)
-        
         self.recent_events.append(event)
         if len(self.recent_events) > 10:
             self.recent_events.pop(0)
@@ -45,11 +95,31 @@ class SimulationEngine:
         print(f"Current score: {self.match.get_score()}")
 
     def generate_next_event(self) -> TennisEvent:
-        player = random.choice([0, 1])
-        shot_type = random.choice(list(ShotType))
-        shot_outcome = random.choice(list(ShotOutcome))
+        import random
+        
+        # Determine if this is a serve or a regular shot
+        is_serve = self.match.state.point_score == ["0", "0"]
+        
+        player = self.match.state.server if is_serve else random.choice([0, 1])
+        
+        if is_serve:
+            shot_type = ShotType.SERVE
+            # Adjust probabilities for serve outcomes
+            serve_in_prob = self.match.players[player].serve_accuracy
+            if random.random() < serve_in_prob:
+                shot_outcome = random.choices(
+                    [ShotOutcome.IN_PLAY, ShotOutcome.WINNER],
+                    weights=[0.9, 0.1]
+                )[0]
+            else:
+                shot_outcome = ShotOutcome.OUT
+        else:
+            shot_type = random.choice(list(ShotType))
+            shot_outcome = random.choice(list(ShotOutcome))
+        
         ball_speed = random.uniform(60, 160)
         ball_spin = random.uniform(1000, 4000)
+        
         return TennisEvent(player, shot_type, shot_outcome, ball_speed, ball_spin)
 
     def update_odds(self):
@@ -65,20 +135,27 @@ class SimulationEngine:
         return {k: [f"{v[0]:.2f}", f"{v[1]:.2f}"] for k, v in odds.items()}
 
     def print_final_results(self):
-        results = self.get_match_results()
-        print(f"Winner: {results['winner']}")
-        print(f"Final score: {results['score']}")
+        winner = self.match.get_winner()
+        score = self.match.get_score()
+        stats = self.match.get_stats()
+
+        print(f"Winner: {winner}")
+        print(f"Final score: {score}")
         print("Match statistics:")
-        for player, player_stats in results['stats'].items():
+        for player, player_stats in stats.items():
             print(f"  {player}:")
             for stat, value in player_stats.items():
                 print(f"    {stat}: {value}")
-        print(f"Final odds: {self.format_odds(results['final_odds'])}")
-
-    def get_match_results(self) -> Dict:
+        print(f"Final odds: {self.format_odds(self.current_odds)}")
+        
+    def get_match_results(self):
+        winner = self.match.get_winner()
+        score = self.match.get_score()
+        stats = self.match.get_stats()
+        
         return {
-            "winner": self.match.get_winner(),
-            "score": self.match.get_score(),
-            "stats": self.match.get_stats(),
-            "final_odds": self.current_odds
+            'winner': winner,
+            'score': score,
+            'stats': stats,
+            'final_odds': self.format_odds(self.current_odds)
         }

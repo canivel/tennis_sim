@@ -14,18 +14,6 @@ class PointOutcome(Enum):
     NET = 4
     OUT = 5
 
-class ShotType(Enum):
-    SERVE = 0
-    FOREHAND = 1
-    BACKHAND = 2
-    VOLLEY_FOREHAND = 3
-    VOLLEY_BACKHAND = 4
-    SMASH = 5
-    SLICE_FOREHAND = 6
-    SLICE_BACKHAND = 7
-    DROPSHOT_FOREHAND = 8
-    DROPSHOT_BACKHAND = 9
-
 class Surface(Enum):
     HARD = 'hard'
     CLAY = 'clay'
@@ -64,9 +52,11 @@ class Match:
         self.is_indoor = is_indoor
         self.weather = weather if not is_indoor else Weather.INDOOR
         self.event_country = event_country
-        self.current_shot_type = ShotType.SERVE  # Initialize with SERVE
+        self.current_shot_type = ShotType.SERVE_1ST  # Initialize with SERVE
         self.current_ball_speed = 0.0  # Initialize with 0
         self.current_ball_spin = 0.0  # Initialize with 0
+        self.previous_event: Optional[TennisEvent] = None
+        self.current_point_events: List[TennisEvent] = []
     
     def set_current_shot_type(self, shot_type: ShotType):
         self.current_shot_type = shot_type
@@ -258,23 +248,35 @@ class Match:
     def get_stats(self) -> Dict[str, Dict[str, int]]:
         return {player.name: player.stats for player in self.players}
 
-    def update_state(self, event: TennisEvent):
-        if event.shot_outcome != ShotOutcome.IN_PLAY:
-            self.play_point(event.shot_outcome, event.player)
-            self.update_stats(event)
-            
     def update_stats(self, event: TennisEvent):
         player = self.players[event.player]
-        if event.shot_type == ShotType.SERVE:
-            if event.shot_outcome == ShotOutcome.WINNER:
+        opponent = self.players[1 - event.player]
+        
+        if event.shot_type in [ShotType.SERVE_1ST, ShotType.SERVE_2ND]:
+            if event.shot_outcome == ShotOutcome.ACE:
                 player.stats['aces'] += 1
-            elif event.shot_outcome in [ShotOutcome.NET, ShotOutcome.OUT]:
+                player.stats['winners'] += 1
+            elif event.shot_outcome == ShotOutcome.DOUBLE_FAULT:
                 player.stats['double_faults'] += 1
+                opponent.stats['winners'] += 1
         
         if event.shot_outcome == ShotOutcome.WINNER:
             player.stats['winners'] += 1
         elif event.shot_outcome == ShotOutcome.UNFORCED_ERROR:
             player.stats['unforced_errors'] += 1
+        elif event.shot_outcome == ShotOutcome.FORCED_ERROR:
+            opponent.stats['winners'] += 1
+
+    def update_state(self, event: TennisEvent):
+        self.current_point_events.append(event)
+        
+        if event.shot_outcome not in [ShotOutcome.IN_PLAY, ShotOutcome.OUT]:
+            winner = event.player if event.shot_outcome in [ShotOutcome.ACE, ShotOutcome.WINNER, ShotOutcome.FORCED_ERROR] else 1 - event.player
+            self.play_point(event.shot_outcome, winner)
+            self.update_stats(event)
+    
+    def is_point_over(self) -> bool:
+        return len(self.current_point_events) > 0 and self.current_point_events[-1].shot_outcome not in [ShotOutcome.IN_PLAY, ShotOutcome.OUT]
 
     def get_winner(self) -> str:
         return self.players[self.state.match_score.index(max(self.state.match_score))].name
@@ -288,29 +290,12 @@ class Match:
 
     def get_stats(self) -> Dict:
         return {player.name: player.stats for player in self.players}
-            
-    def is_point_over(self) -> bool:
-        return len(self.point_history) > 0 and self.point_history[-1][0] != PointOutcome.IN_PLAY
-
+    
     def end_point(self):
-        # Update statistics
-        last_point = self.point_history[-1]
-        winner = last_point[1]
-        outcome = last_point[0]
-        
-        if outcome == PointOutcome.WINNER:
-            self.players[winner].stats['winners'] += 1
-        elif outcome == PointOutcome.UNFORCED_ERROR:
-            self.players[1-winner].stats['unforced_errors'] += 1
-        elif outcome == PointOutcome.NET or outcome == PointOutcome.OUT:
-            if self.state.server == 1-winner:  # If the server lost the point
-                self.players[1-winner].stats['double_faults'] += 1
-            else:
-                self.players[1-winner].stats['unforced_errors'] += 1
-        
-        # Check if this point ended a game
-        if self.is_game_over():
-            self.end_game()
+        if self.is_point_over():
+            self.current_point_events = []
+            if self.is_game_over():
+                self.end_game()
 
     def end_game(self):
         # Update game score
