@@ -37,9 +37,9 @@ class OddsCalculator:
         return [odds[0] * factor, odds[1] / factor]
     
     def calculate_set_odds(self, match_odds: List[float], match_state: Dict) -> List[float]:
-        set_score = match_state['set_score']
-        game_score = match_state['game_score']
-        sets_to_win = match_state['sets_to_win']
+        set_score = [match_state.get('set_score_1', 0), match_state.get('set_score_2', 0)]
+        game_score = [match_state.get('game_score_1', 0), match_state.get('game_score_2', 0)]
+        sets_to_win = 3  # Assuming best of 5 sets, adjust if necessary
         
         # Convert match odds to set win probability
         set_win_prob = self.odds_to_probability(match_odds[0])
@@ -61,19 +61,20 @@ class OddsCalculator:
         return self.convert_probability_to_odds(set_win_prob)
     
     def calculate_game_odds(self, match_odds: List[float], match_state: Dict) -> List[float]:
-        point_score = match_state['point_score']
-        serving_player = match_state['server']
+        server = match_state.get('server', 0)
+        point_score_1 = match_state.get('point_score_1', '0')
+        point_score_2 = match_state.get('point_score_2', '0')
         
         # Convert match odds to game win probability
         game_win_prob = self.odds_to_probability(match_odds[0])
         
         # Adjust for serving player
-        if serving_player == 1:  # If player 2 is serving
+        if server == 1:  # If player 2 is serving
             game_win_prob = 1 - game_win_prob
         
         # Adjust for current point score
         point_values = {'0': 0, '15': 1, '30': 2, '40': 3, 'Ad': 4}
-        point_difference = point_values[point_score[0]] - point_values[point_score[1]]
+        point_difference = point_values.get(point_score_1, 0) - point_values.get(point_score_2, 0)
         
         # Use logistic function to adjust game win probability based on point difference
         game_win_prob = 1 / (1 + math.exp(-point_difference))
@@ -84,7 +85,7 @@ class OddsCalculator:
         game_odds = self.convert_probability_to_odds(game_win_prob)
         
         # If player 2 is serving, swap the odds
-        return game_odds if serving_player == 0 else game_odds[::-1]
+        return game_odds if server == 0 else game_odds[::-1]
     
     def odds_to_probability(self, odds: float) -> float:
         return 1 / odds if odds > 0 else 0

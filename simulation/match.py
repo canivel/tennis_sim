@@ -5,7 +5,7 @@ from typing import List, Tuple, Optional, Dict
 from enum import Enum
 from .player import PlayerStats
 from .match_formats import MatchFormat
-
+from .events import TennisEvent, ShotType, ShotOutcome
 class PointOutcome(Enum):
     IN_PLAY = 0
     WINNER = 1
@@ -39,6 +39,7 @@ class Weather(Enum):
     RAINY = 'rainy'
     INDOOR = 'indoor'
 
+
 @dataclass
 class MatchState:
     server: int
@@ -63,6 +64,18 @@ class Match:
         self.is_indoor = is_indoor
         self.weather = weather if not is_indoor else Weather.INDOOR
         self.event_country = event_country
+        self.current_shot_type = ShotType.SERVE  # Initialize with SERVE
+        self.current_ball_speed = 0.0  # Initialize with 0
+        self.current_ball_spin = 0.0  # Initialize with 0
+    
+    def set_current_shot_type(self, shot_type: ShotType):
+        self.current_shot_type = shot_type
+    
+    def set_current_shot_info(self, shot_type: ShotType, ball_speed: float, ball_spin: float):
+        self.current_shot_type = shot_type
+        self.current_ball_speed = ball_speed
+        self.current_ball_spin = ball_spin
+
     
     def calculate_average_odds(self) -> Tuple[float, float]:
         # This is a simplified calculation and should be adjusted based on your specific requirements
@@ -93,15 +106,38 @@ class Match:
             "set_score_2": self.state.set_score[1],
             "game_score_1": self.state.game_score[0],
             "game_score_2": self.state.game_score[1],
+            "point_score_1": self.state.point_score[0],
+            "point_score_2": self.state.point_score[1],
             "current_set": self.state.current_set,
             "is_tiebreak": self.state.is_tiebreak,
             "is_match_tiebreak": self.state.is_match_tiebreak,
             "fatigue_1": self.players[0].fatigue,
             "fatigue_2": self.players[1].fatigue,
-            "player1_serve": self.players[0].serve_accuracy,
-            "player2_serve": self.players[1].serve_accuracy,
-            "player1_ground": self.players[0].groundstroke_accuracy,
-            "player2_ground": self.players[1].groundstroke_accuracy,
+            "player1_serve_accuracy": self.players[0].serve_accuracy,
+            "player2_serve_accuracy": self.players[1].serve_accuracy,
+            "player1_ground_accuracy": self.players[0].groundstroke_accuracy,
+            "player2_ground_accuracy": self.players[1].groundstroke_accuracy,
+            "player1_volley_accuracy": self.players[0].volley_accuracy,
+            "player2_volley_accuracy": self.players[1].volley_accuracy,
+            "player1_atp_rank": self.players[0].atp_rank,
+            "player2_atp_rank": self.players[1].atp_rank,
+            "player1_previous_atp_rank": self.players[0].previous_atp_rank,
+            "player2_previous_atp_rank": self.players[1].previous_atp_rank,
+            "player1_weakness": ','.join([w.value for w in self.players[0].weaknesses]),
+            "player2_weakness": ','.join([w.value for w in self.players[1].weaknesses]),
+            "player1_strength": ','.join([s.value for s in self.players[0].strengths]),
+            "player2_strength": ','.join([s.value for s in self.players[1].strengths]),
+            "player1_previous_tournament_results": ','.join([r.value for r in self.players[0].previous_tournament_results]),
+            "player2_previous_tournament_results": ','.join([r.value for r in self.players[1].previous_tournament_results]),
+            "player1_country": self.players[0].country,
+            "player2_country": self.players[1].country,
+            "player1_current_injuries": ','.join([f"{k}:{v.value}" for k, v in self.players[0].current_injuries.items()]),
+            "player2_current_injuries": ','.join([f"{k}:{v.value}" for k, v in self.players[1].current_injuries.items()]),
+            "player1_previous_injuries": ','.join([f"{k}:{v.value}" for k, v in self.players[0].previous_injuries.items()]),
+            "player2_previous_injuries": ','.join([f"{k}:{v.value}" for k, v in self.players[1].previous_injuries.items()]),
+            "current_shot_type": self.current_shot_type.value,
+            "current_ball_speed": self.current_ball_speed,
+            "current_ball_spin": self.current_ball_spin,
             "average_winning_odd": winning_odd,
             "average_losing_odd": losing_odd,
             "player1_wins_vs_opponent": self.players[0].get_wins_vs_opponent(self.players[1].name),
@@ -119,11 +155,18 @@ class Match:
         if self.state.is_tiebreak or self.state.is_match_tiebreak:
             self.state.point_score[winner] = str(int(self.state.point_score[winner]) + 1)
         else:
-            point_mapping = {"0": "15", "15": "30", "30": "40", "40": "Game"}
-            if self.state.point_score[winner] == "40" and self.state.point_score[1-winner] == "40":
-                self.state.point_score[winner] = "Adv"
-            elif self.state.point_score[1-winner] == "Adv":
-                self.state.point_score[1-winner] = "40"
+            point_mapping = {"0": "15", "15": "30", "30": "40"}
+            loser = 1 - winner
+            
+            if self.state.point_score[winner] == "40":
+                if self.state.point_score[loser] == "40":
+                    self.state.point_score[winner] = "Adv"
+                else:
+                    self.state.point_score[winner] = "Game"
+            elif self.state.point_score[winner] == "Adv":
+                self.state.point_score[winner] = "Game"
+            elif self.state.point_score[loser] == "Adv":
+                self.state.point_score[loser] = "40"
             else:
                 self.state.point_score[winner] = point_mapping[self.state.point_score[winner]]
 
@@ -172,13 +215,8 @@ class Match:
     def is_match_over(self) -> bool:
         return max(self.state.set_score) >= self.match_format.sets_to_win
 
-    def play_point(self, outcome: PointOutcome, winner: Optional[int] = None) -> None:
-        if outcome != PointOutcome.IN_PLAY and winner is None:
-            raise ValueError("Winner must be specified for non-IN_PLAY outcomes")
-
-        self.point_history.append((outcome, winner))
-
-        if outcome != PointOutcome.IN_PLAY:
+    def play_point(self, outcome: ShotOutcome, winner: int):
+        if outcome != ShotOutcome.IN_PLAY:
             self.update_point_score(winner)
 
             if self.is_game_over():
@@ -212,47 +250,45 @@ class Match:
 
     def get_score(self) -> Dict[str, List[int]]:
         return {
-            "sets": self.state.set_score.copy(),
-            "games": self.state.game_score.copy(),
-            "points": [int(score) if score.isdigit() else 50 for score in self.state.point_score]
+            "sets": self.state.set_score,
+            "games": self.state.game_score,
+            "points": self.state.point_score
         }
 
     def get_stats(self) -> Dict[str, Dict[str, int]]:
-        stats = {player.name: {"aces": 0, "double_faults": 0, "winners": 0, "unforced_errors": 0} 
-                 for player in self.players}
-        
-        for outcome, winner in self.point_history:
-            if outcome == PointOutcome.WINNER:
-                stats[self.players[winner].name]["winners"] += 1
-            elif outcome == PointOutcome.UNFORCED_ERROR:
-                stats[self.players[1-winner].name]["unforced_errors"] += 1
-        
-        return stats
+        return {player.name: player.stats for player in self.players}
 
-    def update_state(self, event):
-        # Update match state based on the event
-        if event.shot_outcome != PointOutcome.IN_PLAY:
+    def update_state(self, event: TennisEvent):
+        if event.shot_outcome != ShotOutcome.IN_PLAY:
             self.play_point(event.shot_outcome, event.player)
+            self.update_stats(event)
+            
+    def update_stats(self, event: TennisEvent):
+        player = self.players[event.player]
+        if event.shot_type == ShotType.SERVE:
+            if event.shot_outcome == ShotOutcome.WINNER:
+                player.stats['aces'] += 1
+            elif event.shot_outcome in [ShotOutcome.NET, ShotOutcome.OUT]:
+                player.stats['double_faults'] += 1
         
-        # Update player fatigue and confidence
-        fatigue_increase = 0.01
-        confidence_change = 0.02
-        if event.shot_type in [ShotType.SERVE, ShotType.SMASH]:
-            fatigue_increase *= 2
-        
-        self.players[event.player].fatigue = min(1.0, self.players[event.player].fatigue + fatigue_increase)
-        
-        if event.shot_outcome in [PointOutcome.WINNER, PointOutcome.FORCED_ERROR]:
-            self.players[event.player].confidence = min(1.0, self.players[event.player].confidence + confidence_change)
-            self.players[1 - event.player].confidence = max(0.0, self.players[1 - event.player].confidence - confidence_change)
-        elif event.shot_outcome in [PointOutcome.UNFORCED_ERROR, PointOutcome.NET, PointOutcome.OUT]:
-            self.players[event.player].confidence = max(0.0, self.players[event.player].confidence - confidence_change)
-            self.players[1 - event.player].confidence = min(1.0, self.players[1 - event.player].confidence + confidence_change)
-        
-        # Slightly reduce fatigue for the non-hitting player
-        other_player = 1 - event.player
-        self.players[other_player].fatigue = max(0.0, self.players[other_player].fatigue - 0.005)
+        if event.shot_outcome == ShotOutcome.WINNER:
+            player.stats['winners'] += 1
+        elif event.shot_outcome == ShotOutcome.UNFORCED_ERROR:
+            player.stats['unforced_errors'] += 1
 
+    def get_winner(self) -> str:
+        return self.players[self.state.match_score.index(max(self.state.match_score))].name
+
+    def get_score(self) -> Dict:
+        return {
+            "sets": self.state.set_score,
+            "games": self.state.game_score,
+            "points": self.state.point_score
+        }
+
+    def get_stats(self) -> Dict:
+        return {player.name: player.stats for player in self.players}
+            
     def is_point_over(self) -> bool:
         return len(self.point_history) > 0 and self.point_history[-1][0] != PointOutcome.IN_PLAY
 
